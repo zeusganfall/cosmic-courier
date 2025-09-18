@@ -68,6 +68,14 @@
       { "level": 3, "efficiency": 0.6, "cost": 20000 }
     ]
   },
+  "game_goals": {
+    "win_credits": 100000,
+    "max_debt": 10000
+  },
+  "loan_system": {
+    "loan_amount": 500,
+    "interest_rate": 0.10
+  },
   "defaults": {
     "ship": {
       "fuel_capacity": 100,

@@ -136,6 +136,7 @@ class Player:
         self.display_mode = "normal"
         self.reputation = {faction: 0 for faction in factions}
         self.current_mission = None
+        self.debt = 0
 
 def display_ui(game_state, last_action_message="Welcome to Cosmic Courier!", show_market=True):
     player = game_state.player
@@ -146,12 +147,9 @@ def display_ui(game_state, last_action_message="Welcome to Cosmic Courier!", sho
     cargo_str = ", ".join([f"{good.name} ({quantity})" for good, quantity in player.ship.cargo.items()]) or "Empty"
     print(f"🌍 Location: {player.location.name}")
     print(f"💳 Credits: {player.credits}")
+    print(f"💰 Debt: {player.debt}")
     print(f"⛽ Fuel: {player.ship.fuel} / {player.ship.fuel_capacity}")
     print(f"📦 Cargo ({cargo_status}): {cargo_str}")
-    print("-----------------------------")
-    print("🤝 Reputation:")
-    rep_str = ", ".join([f"{faction}: {rep}" for faction, rep in player.reputation.items()])
-    print(f"  {rep_str}")
     print("-----------------------------")
     if player.current_mission:
         print("🎯 Current Mission:")
@@ -183,9 +181,10 @@ def display_ui(game_state, last_action_message="Welcome to Cosmic Courier!", sho
     print("[4] Refuel ship")
     print("[5] Visit shipyard")
     print("[6] View mission board")
-    print("[7] Check status")
-    print(f"[8] Toggle Display (Current: {player.display_mode.capitalize()})")
-    print("[9] Quit game")
+    print("[7] Repay debt")
+    print("[8] Check status")
+    print(f"[9] Toggle Display (Current: {player.display_mode.capitalize()})")
+    print("[10] Quit game")
     print("=============================")
 
 def setup_game(data_file="game_data.json"):
@@ -210,6 +209,15 @@ def setup_game(data_file="game_data.json"):
     game_state = GameState(player, planets, game_data)
     starting_planet.market.generate_market_data(game_state.active_events)
     return game_state
+
+def apply_interest(game_state):
+    player = game_state.player
+    if player.debt > 0:
+        interest_rate = game_state.game_data["loan_system"]["interest_rate"]
+        interest_amount = int(player.debt * interest_rate)
+        player.debt += interest_amount
+        return f"An interest charge of {interest_amount} credits has been added to your debt."
+    return ""
 
 def handle_events(game_state):
     messages = []
@@ -237,21 +245,61 @@ def complete_mission(game_state):
     player.current_mission = None
     return f"Mission complete! Delivered {mission.quantity} {mission.good.name} to {mission.destination.name}.\nReward: {mission.reward} credits. Reputation with {mission.faction} increased."
 
+def handle_game_end(message):
+    """Handles the game end screen and prompts for restart or quit."""
+    print(message)
+    print("\n--- GAME OVER ---")
+    while True:
+        choice = input("Play again? (y/n): ").lower()
+        if choice == 'y':
+            return "restart"
+        elif choice == 'n':
+            return "quit"
+
+def offer_loan(game_state):
+    player = game_state.player
+    loan_amount = game_state.game_data["loan_system"]["loan_amount"]
+    message = f"You are stranded without fuel or credits. A mysterious benefactor offers you a loan of {loan_amount} credits. Accept? (y/n)"
+    display_ui(game_state, message, show_market=False)
+    choice = input("> ").lower()
+    if choice == 'y':
+        player.credits += loan_amount
+        player.debt += loan_amount
+        return f"You have accepted the loan. {loan_amount} credits have been added. Good luck."
+    else:
+        return "GAME OVER"
+
 def game_loop(game_state):
     last_action_message = "Welcome to Cosmic Courier! What are your orders, Captain?"
     while True:
         player = game_state.player
         event_messages = handle_events(game_state)
+        interest_message = apply_interest(game_state)
         if player.current_mission and player.location == player.current_mission.destination:
             if player.ship.cargo.get(player.current_mission.good, 0) >= player.current_mission.quantity:
                 last_action_message = complete_mission(game_state)
         display_message = last_action_message
         if event_messages:
             display_message += "\n\n" + event_messages
-        if player.ship.fuel <= 0 and player.credits <= 0:
-            display_ui(game_state, "You've run out of fuel and credits!\nYour journey ends here.", show_market=False)
-            print("\n--- GAME OVER ---")
-            sys.exit()
+        if interest_message:
+            display_message += "\n" + interest_message
+
+        # Win/Loss Condition Checks
+        win_credits = game_state.game_data["game_goals"]["win_credits"]
+        if player.credits >= win_credits and player.debt == 0:
+            return handle_game_end(f"Congratulations! You've reached {win_credits} credits with no debt and won the game!")
+
+        max_debt = game_state.game_data["game_goals"]["max_debt"]
+        if player.debt > max_debt:
+            return handle_game_end(f"You have exceeded the maximum debt of {max_debt}. The bank has seized your assets.")
+
+        if player.ship.fuel <= 0 and player.credits <= 0 and player.ship.get_cargo_count() == 0:
+            loan_result = offer_loan(game_state)
+            if loan_result == "GAME OVER":
+                return handle_game_end("You declined the loan and were left stranded. Your journey ends here.")
+            else:
+                last_action_message = loan_result
+
         show_market = player.display_mode == 'normal'
         display_ui(game_state, display_message, show_market=show_market)
         try:
@@ -273,14 +321,16 @@ def game_loop(game_state):
             elif choice == 6:
                 last_action_message = view_mission_board(game_state)
             elif choice == 7:
-                last_action_message = "Status panel refreshed."
+                last_action_message = repay_debt(game_state)
             elif choice == 8:
+                last_action_message = "Status panel refreshed."
+            elif choice == 9:
                 if player.display_mode == "normal":
                     player.display_mode = "compact"
                 else:
                     player.display_mode = "normal"
                 last_action_message = f"Display mode switched to {player.display_mode.capitalize()}."
-            elif choice == 9:
+            elif choice == 10:
                 print("Thank you for playing Cosmic Courier!")
                 sys.exit()
             else:
@@ -472,8 +522,8 @@ def view_mission_board(game_state):
     planet = player.location
     if not planet.mission_board:
         template = random.choice(game_state.game_data["mission_templates"])
-        all_goods = {g.name: g for g in planet.market.all_goods}
-        possible_goods = [g for g in all_goods.values() if g.type in template["good_types"]]
+        all_goods_map = {g.name: g for g in planet.market.all_goods}
+        possible_goods = [g for g in all_goods_map.values() if g.type in template["good_types"]]
         good = random.choice(possible_goods)
 
         destination = random.choice([p for p in game_state.planets if p != planet])
@@ -505,6 +555,33 @@ def view_mission_board(game_state):
             return "Invalid choice."
     except ValueError:
         return "Invalid input."
+
+def repay_debt(game_state):
+    """Handles the player debt repayment UI and logic."""
+    player = game_state.player
+    if player.debt == 0:
+        return "You have no debt to repay. Congratulations!"
+
+    message = f"You have {player.debt} credits of outstanding debt."
+    display_ui(game_state, message, show_market=False)
+
+    try:
+        amount = int(input(f"Enter amount to repay (you have {player.credits} credits): "))
+        if amount <= 0:
+            return "Amount must be a positive number."
+    except ValueError:
+        return "Invalid amount. Please enter a number."
+
+    if amount > player.debt:
+        amount = player.debt
+
+    if amount > player.credits:
+        return f"You only have {player.credits} credits. Cannot repay that amount."
+
+    player.credits -= amount
+    player.debt -= amount
+
+    return f"You repaid {amount} credits of your debt. Remaining debt: {player.debt}."
 
 def sell_goods(game_state):
     player = game_state.player
@@ -538,5 +615,9 @@ def sell_goods(game_state):
     return f"Sold {quantity_to_sell} unit(s) of {good_to_sell.name} for {total_sale} credits."
 
 if __name__ == "__main__":
-    game_state = setup_game()
-    game_loop(game_state)
+    while True:
+        game_state = setup_game()
+        result = game_loop(game_state)
+        if result == "quit":
+            print("Thanks for playing!")
+            break
