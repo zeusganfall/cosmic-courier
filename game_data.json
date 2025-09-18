@@ -1,33 +1,53 @@
 {
   "goods": [
-    "Water",
-    "Food",
-    "Minerals"
+    { "name": "Water", "type": "natural", "base_price": 30, "base_stock": 100 },
+    { "name": "Food", "type": "natural", "base_price": 50, "base_stock": 80 },
+    { "name": "Minerals", "type": "raw_material", "base_price": 100, "base_stock": 50 },
+    { "name": "Alloys", "type": "industrial", "base_price": 250, "base_stock": 40 },
+    { "name": "Electronics", "type": "high_tech", "base_price": 500, "base_stock": 25 },
+    { "name": "Luxury Goods", "type": "luxury", "base_price": 1000, "base_stock": 10 }
   ],
   "planets": [
+    { "name": "Terra", "tech_level": "high_tech" },
+    { "name": "Mars Colony", "tech_level": "industrial" },
+    { "name": "Europa Mining Outpost", "tech_level": "raw_material" },
+    { "name": "Ganymede Farms", "tech_level": "natural" },
+    { "name": "Alpha Centauri Resort", "tech_level": "luxury" }
+  ],
+  "tech_level_modifiers": {
+      "natural":      { "natural": 0.5, "raw_material": 1.2, "industrial": 1.5, "high_tech": 2.0, "luxury": 2.5, "fuel": 1.8 },
+      "raw_material": { "natural": 1.5, "raw_material": 0.6, "industrial": 1.3, "high_tech": 1.8, "luxury": 2.2, "fuel": 1.5 },
+      "industrial":   { "natural": 2.0, "raw_material": 1.2, "industrial": 0.7, "high_tech": 1.1, "luxury": 1.5, "fuel": 0.8 },
+      "high_tech":    { "natural": 2.5, "raw_material": 1.8, "industrial": 1.1, "high_tech": 0.8, "luxury": 1.2, "fuel": 1.0 },
+      "luxury":       { "natural": 3.0, "raw_material": 2.5, "industrial": 1.5, "high_tech": 1.2, "luxury": 0.7, "fuel": 2.5 }
+  },
+  "travel_options": {
+    "base_fuel_cost_per_unit": 1,
+    "random_event_chance": 0.25,
+    "base_fuel_price": 10
+  },
+  "distance_matrix": {
+    "Terra": { "Mars Colony": 10, "Europa Mining Outpost": 15, "Ganymede Farms": 17, "Alpha Centauri Resort": 50 },
+    "Mars Colony": { "Terra": 10, "Europa Mining Outpost": 5, "Ganymede Farms": 7, "Alpha Centauri Resort": 55 },
+    "Europa Mining Outpost": { "Terra": 15, "Mars Colony": 5, "Ganymede Farms": 2, "Alpha Centauri Resort": 60 },
+    "Ganymede Farms": { "Terra": 17, "Mars Colony": 7, "Europa Mining Outpost": 2, "Alpha Centauri Resort": 62 },
+    "Alpha Centauri Resort": { "Terra": 50, "Mars Colony": 55, "Europa Mining Outpost": 60, "Ganymede Farms": 62 }
+  },
+  "random_events": [
     {
-      "name": "Terra",
-      "market": {
-        "Water": 100,
-        "Food": 150,
-        "Minerals": 200
-      }
+      "name": "Micrometeoroid Hit",
+      "description": "A micrometeoroid strikes the hull, causing a minor fuel leak.",
+      "effect": { "type": "fuel_loss", "amount": [1, 3] }
     },
     {
-      "name": "Mars",
-      "market": {
-        "Water": 120,
-        "Food": 130,
-        "Minerals": 180
-      }
+      "name": "Solar Flare",
+      "description": "A surprise solar flare forces a minor course correction, consuming extra fuel.",
+      "effect": { "type": "fuel_loss", "amount": [2, 5] }
     },
     {
-      "name": "Europa",
-      "market": {
-        "Water": 90,
-        "Food": 160,
-        "Minerals": 220
-      }
+      "name": "Space Debris",
+      "description": "You navigate a dense field of space debris, using extra fuel for maneuvers.",
+      "effect": { "type": "fuel_loss", "amount": [1, 5] }
     }
   ],
   "defaults": {
