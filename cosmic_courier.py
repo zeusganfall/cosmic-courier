@@ -148,6 +148,8 @@ def display_ui(game_state, last_action_message="Welcome to Cosmic Courier!", sho
     print(f"🌍 Location: {player.location.name}")
     print(f"💳 Credits: {player.credits}")
     print(f"💰 Debt: {player.debt}")
+    reputation_str = ", ".join([f"{faction}: {rep}" for faction, rep in player.reputation.items()])
+    print(f"🤝 Reputation: {reputation_str}")
     print(f"⛽ Fuel: {player.ship.fuel} / {player.ship.fuel_capacity}")
     print(f"📦 Cargo ({cargo_status}): {cargo_str}")
     print("-----------------------------")
@@ -384,41 +386,54 @@ def travel(game_state):
 
 def buy_goods(game_state):
     player = game_state.player
-    display_ui(game_state, "What would you like to buy? (Type 'cancel' to exit)", show_market=True)
-    good_name = input("Enter good name: ").lower()
-    if good_name == 'cancel':
-        return "Purchase cancelled."
-    found_good = None
-    all_goods = [g for g in player.location.market.prices.keys()]
-    for good in all_goods:
-        if good.name.lower() == good_name:
-            found_good = good
-            break
-    if not found_good:
-        return f"'{good_name.capitalize()}' not found in this market."
-    price = player.location.market.prices[found_good]
-    stock = player.location.market.stock[found_good]
-    if stock == 0:
-        return f"{found_good.name} is out of stock."
+    market = player.location.market
+    tradable_goods = [g for g in market.prices if market.stock.get(g, 0) > 0]
+    if not tradable_goods:
+        return "There are no goods available to buy at this market."
+    message = "Please choose a good to buy."
+    display_ui(game_state, message, show_market=True)
+    print("\nAvailable goods to buy:")
+    for i, good in enumerate(tradable_goods):
+        price = market.prices[good]
+        stock = market.stock[good]
+        print(f"{i + 1}. {good.name} (Price: {price}, Stock: {stock})")
+    print(f"{len(tradable_goods) + 1}. Cancel")
     try:
-        quantity = int(input(f"Enter quantity to buy (max {stock}, you have {player.credits} credits): "))
-        if quantity <= 0:
-            return "Quantity must be a positive number."
-    except ValueError:
-        return "Invalid quantity. Please enter a number."
-    total_cost = price * quantity
-    if quantity > stock:
-        return f"Not enough stock. Only {stock} units available."
-    if total_cost > player.credits:
-        return f"Not enough credits. You need {total_cost} credits, but you only have {player.credits}."
-    cargo_space_needed = quantity
-    current_cargo_count = player.ship.get_cargo_count()
-    if current_cargo_count + cargo_space_needed > player.ship.cargo_hold_size:
-        return f"Not enough cargo space. You need {cargo_space_needed} units of space, but you only have {player.ship.cargo_hold_size - current_cargo_count} left."
-    player.credits -= total_cost
-    player.ship.add_cargo(found_good, quantity)
-    player.location.market.stock[found_good] -= quantity
-    return f"Bought {quantity} unit(s) of {found_good.name} for {total_cost} credits."
+        choice_str = input("Choose a good to buy (number): ")
+        if not choice_str:
+            return "No selection made. Purchase cancelled."
+        choice = int(choice_str) - 1
+        if choice == len(tradable_goods):
+            return "Purchase cancelled."
+        if 0 <= choice < len(tradable_goods):
+            found_good = tradable_goods[choice]
+            price = market.prices[found_good]
+            stock = market.stock[found_good]
+            try:
+                quantity_str = input(f"Enter quantity to buy (max {stock}, you have {player.credits} credits): ")
+                if not quantity_str:
+                    return "No quantity entered. Purchase cancelled."
+                quantity = int(quantity_str)
+                if quantity <= 0:
+                    return "Quantity must be a positive number."
+            except ValueError:
+                return "Invalid quantity. Please enter a number."
+            total_cost = price * quantity
+            if quantity > stock:
+                return f"Not enough stock. Only {stock} units available."
+            if total_cost > player.credits:
+                return f"Not enough credits. You need {total_cost} credits, but you only have {player.credits}."
+            current_cargo_count = player.ship.get_cargo_count()
+            if current_cargo_count + quantity > player.ship.cargo_hold_size:
+                return f"Not enough cargo space. You need {quantity} units of space, but you only have {player.ship.cargo_hold_size - current_cargo_count} left."
+            player.credits -= total_cost
+            player.ship.add_cargo(found_good, quantity)
+            market.stock[found_good] -= quantity
+            return f"Bought {quantity} unit(s) of {found_good.name} for {total_cost} credits."
+        else:
+            return "Invalid choice."
+    except (ValueError, IndexError):
+        return "Invalid choice. Please enter a number."
 
 def refuel_ship(game_state):
     player = game_state.player
@@ -442,6 +457,32 @@ def refuel_ship(game_state):
     player.credits -= total_cost
     player.ship.fuel += quantity
     return f"Refueled {quantity} units for {total_cost} credits. Fuel is now {player.ship.fuel}/{player.ship.fuel_capacity}."
+
+def _attempt_upgrade(player, ship, component_name, level_attr, upgrade_key):
+    current_level = getattr(ship, level_attr)
+    max_level = len(ship.upgrades_data[upgrade_key])
+
+    if current_level >= max_level:
+        return f"{component_name} is already at max level."
+
+    next_level_data = ship.upgrades_data[upgrade_key][current_level]
+    cost = next_level_data['cost']
+
+    if player.credits < cost:
+        return f"Not enough credits for {component_name} upgrade."
+
+    player.credits -= cost
+    setattr(ship, level_attr, current_level + 1)
+    ship._update_stats_from_levels()
+
+    new_level = getattr(ship, level_attr)
+    if component_name == "Cargo Hold":
+        return f"Cargo Hold upgraded to Level {new_level}! New capacity: {ship.cargo_hold_size}."
+    elif component_name == "Fuel Tank":
+        return f"Fuel Tank upgraded to Level {new_level}! New capacity: {ship.fuel_capacity}."
+    elif component_name == "Engine":
+        return f"Engine upgraded to Level {new_level}! New efficiency: {ship.engine_efficiency}."
+    return "Error in upgrade."
 
 def visit_shipyard(game_state):
     player = game_state.player
@@ -470,48 +511,18 @@ def visit_shipyard(game_state):
         message += f"[3] Engine (Level {engine_level}/{max_engine_level})\n"
         if engine_level < max_engine_level:
             next_level_data = upgrades["engine"][engine_level]
-            message += f"    Next Level: {next_level_data['efficiency'] * 100}% efficiency. Cost: {next_level_data['cost']} credits.\n"
+            message += f"    Next Level: {next_level_data['efficiency'] * 100:.0f}% efficiency. Cost: {next_level_data['cost']} credits.\n"
         else:
             message += "    Max level reached.\n"
         message += "\n[4] Exit Shipyard"
         display_ui(game_state, message, show_market=False)
         choice = input("Enter your choice: ")
         if choice == '1':
-            if cargo_level < max_cargo_level:
-                next_level_data = upgrades["cargo_hold"][cargo_level]
-                if player.credits >= next_level_data["cost"]:
-                    player.credits -= next_level_data["cost"]
-                    ship.cargo_hold_level += 1
-                    ship._update_stats_from_levels()
-                    return f"Cargo Hold upgraded to Level {ship.cargo_hold_level}! New capacity: {ship.cargo_hold_size}."
-                else:
-                    return "Not enough credits for Cargo Hold upgrade."
-            else:
-                return "Cargo Hold is already at max level."
+            return _attempt_upgrade(player, ship, "Cargo Hold", "cargo_hold_level", "cargo_hold")
         elif choice == '2':
-            if fuel_level < max_fuel_level:
-                next_level_data = upgrades["fuel_tank"][fuel_level]
-                if player.credits >= next_level_data["cost"]:
-                    player.credits -= next_level_data["cost"]
-                    ship.fuel_tank_level += 1
-                    ship._update_stats_from_levels()
-                    return f"Fuel Tank upgraded to Level {ship.fuel_tank_level}! New capacity: {ship.fuel_capacity}."
-                else:
-                    return "Not enough credits for Fuel Tank upgrade."
-            else:
-                return "Fuel Tank is already at max level."
+            return _attempt_upgrade(player, ship, "Fuel Tank", "fuel_tank_level", "fuel_tank")
         elif choice == '3':
-            if engine_level < max_engine_level:
-                next_level_data = upgrades["engine"][engine_level]
-                if player.credits >= next_level_data["cost"]:
-                    player.credits -= next_level_data["cost"]
-                    ship.engine_level += 1
-                    ship._update_stats_from_levels()
-                    return f"Engine upgraded to Level {ship.engine_level}! New efficiency: {ship.engine_efficiency}."
-                else:
-                    return "Not enough credits for Engine upgrade."
-            else:
-                return "Engine is already at max level."
+            return _attempt_upgrade(player, ship, "Engine", "engine_level", "engine")
         elif choice == '4':
             return "Exiting shipyard."
         else:
@@ -521,36 +532,47 @@ def view_mission_board(game_state):
     player = game_state.player
     planet = player.location
     if not planet.mission_board:
-        template = random.choice(game_state.game_data["mission_templates"])
-        all_goods_map = {g.name: g for g in planet.market.all_goods}
-        possible_goods = [g for g in all_goods_map.values() if g.type in template["good_types"]]
-        good = random.choice(possible_goods)
+        num_missions_to_generate = 3
+        for _ in range(num_missions_to_generate):
+            template = random.choice(game_state.game_data["mission_templates"])
+            all_goods_map = {g.name: g for g in planet.market.all_goods}
+            possible_goods = [g for g in all_goods_map.values() if g.type in template["good_types"]]
+            if not possible_goods:
+                continue
+            good = random.choice(possible_goods)
+            possible_destinations = [p for p in game_state.planets if p != planet]
+            if not possible_destinations:
+                continue
+            destination = random.choice(possible_destinations)
+            quantity = random.randint(template["min_quantity"], template["max_quantity"])
+            base_reward = good.base_price * quantity * template["reward_multiplier"]
+            reward = int(base_reward * random.uniform(0.9, 1.1))
+            mission = Mission(planet, destination, good, quantity, reward, destination.faction)
+            planet.mission_board.append(mission)
 
-        destination = random.choice([p for p in game_state.planets if p != planet])
-        quantity = random.randint(template["min_quantity"], template["max_quantity"])
-        base_reward = good.base_price * quantity * template["reward_multiplier"]
-        reward = int(base_reward)
-        mission = Mission(planet, destination, good, quantity, reward, destination.faction)
-        planet.mission_board.append(mission)
-
-    message = "Welcome to the Mission Board.\n\nAvailable Missions:\n"
-    for i, mission in enumerate(planet.mission_board):
-        message += f"[{i+1}] {mission}\n"
-    message += f"[{len(planet.mission_board) + 1}] Exit"
-
+    message = "Welcome to the Mission Board."
+    if not planet.mission_board:
+        message += "\nThere are no missions available at this time."
     display_ui(game_state, message, show_market=False)
 
     if player.current_mission:
         return "You already have an active mission."
 
+    if not planet.mission_board:
+        return "No missions available."
+
+    print("\nAvailable Missions:")
+    for i, mission in enumerate(planet.mission_board):
+        print(f"[{i+1}] {mission}")
+    print(f"[{len(planet.mission_board) + 1}] Exit")
+
     try:
         choice = int(input("Choose a mission to accept: ")) - 1
         if 0 <= choice < len(planet.mission_board):
-            player.current_mission = planet.mission_board[choice]
-            planet.mission_board.pop(choice)
+            player.current_mission = planet.mission_board.pop(choice)
             return f"Mission accepted! {player.current_mission}"
         elif choice == len(planet.mission_board):
-             return "Exiting mission board."
+            return "Exiting mission board."
         else:
             return "Invalid choice."
     except ValueError:
@@ -585,34 +607,51 @@ def repay_debt(game_state):
 
 def sell_goods(game_state):
     player = game_state.player
-    display_ui(game_state, "What would you like to sell? (Type 'cancel' to exit)", show_market=True)
-    good_name = input("Enter good name: ").lower()
-    if good_name == 'cancel':
-        return "Sale cancelled."
-    good_to_sell = None
-    for good in player.ship.cargo:
-        if good.name.lower() == good_name:
-            good_to_sell = good
-            break
-    if not good_to_sell:
-        return f"'{good_name.capitalize()}' not found in your cargo."
-    price = player.location.market.prices.get(good_to_sell)
-    if price is None:
-        return f"This planet does not buy {good_to_sell.name}."
-    current_quantity = player.ship.cargo[good_to_sell]
+    market = player.location.market
+    if not player.ship.cargo:
+        return "You have no cargo to sell."
+    sellable_goods = [g for g in player.ship.cargo if g in market.prices]
+    if not sellable_goods:
+        return "This market doesn't seem to be buying any of the goods you are carrying."
+    message = "Please choose a good to sell."
+    display_ui(game_state, message, show_market=True)
+    print("\nAvailable goods to sell:")
+    for i, good in enumerate(sellable_goods):
+        price = market.prices[good]
+        quantity = player.ship.cargo[good]
+        print(f"{i + 1}. {good.name} (Price: {price}, You have: {quantity})")
+    print(f"{len(sellable_goods) + 1}. Cancel")
     try:
-        quantity_to_sell = int(input(f"Enter quantity to sell (you have {current_quantity}): "))
-        if quantity_to_sell <= 0:
-            return "Quantity must be a positive number."
-    except ValueError:
-        return "Invalid quantity. Please enter a number."
-    if quantity_to_sell > current_quantity:
-        return f"You don't have enough. You only have {current_quantity} units of {good_to_sell.name}."
-    total_sale = price * quantity_to_sell
-    player.credits += total_sale
-    player.ship.remove_cargo(good_to_sell, quantity_to_sell)
-    player.location.market.stock[good_to_sell] += quantity_to_sell
-    return f"Sold {quantity_to_sell} unit(s) of {good_to_sell.name} for {total_sale} credits."
+        choice_str = input("Choose a good to sell (number): ")
+        if not choice_str:
+            return "No selection made. Sale cancelled."
+        choice = int(choice_str) - 1
+        if choice == len(sellable_goods):
+            return "Sale cancelled."
+        if 0 <= choice < len(sellable_goods):
+            good_to_sell = sellable_goods[choice]
+            price = market.prices[good_to_sell]
+            current_quantity = player.ship.cargo[good_to_sell]
+            try:
+                quantity_str = input(f"Enter quantity to sell (you have {current_quantity}): ")
+                if not quantity_str:
+                    return "No quantity entered. Sale cancelled."
+                quantity_to_sell = int(quantity_str)
+                if quantity_to_sell <= 0:
+                    return "Quantity must be a positive number."
+            except ValueError:
+                return "Invalid quantity. Please enter a number."
+            if quantity_to_sell > current_quantity:
+                return f"You don't have enough. You only have {current_quantity} units of {good_to_sell.name}."
+            total_sale = price * quantity_to_sell
+            player.credits += total_sale
+            player.ship.remove_cargo(good_to_sell, quantity_to_sell)
+            market.stock[good_to_sell] = market.stock.get(good_to_sell, 0) + quantity_to_sell
+            return f"Sold {quantity_to_sell} unit(s) of {good_to_sell.name} for {total_sale} credits."
+        else:
+            return "Invalid choice."
+    except (ValueError, IndexError):
+        return "Invalid choice. Please enter a number."
 
 if __name__ == "__main__":
     while True:
