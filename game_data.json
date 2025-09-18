@@ -1,0 +1,43 @@
+{
+  "goods": [
+    "Water",
+    "Food",
+    "Minerals"
+  ],
+  "planets": [
+    {
+      "name": "Terra",
+      "market": {
+        "Water": 100,
+        "Food": 150,
+        "Minerals": 200
+      }
+    },
+    {
+      "name": "Mars",
+      "market": {
+        "Water": 120,
+        "Food": 130,
+        "Minerals": 180
+      }
+    },
+    {
+      "name": "Europa",
+      "market": {
+        "Water": 90,
+        "Food": 160,
+        "Minerals": 220
+      }
+    }
+  ],
+  "defaults": {
+    "ship": {
+      "fuel_capacity": 100,
+      "cargo_hold_size": 50
+    },
+    "player": {
+      "credits": 1000,
+      "starting_planet": "Terra"
+    }
+  }
+}

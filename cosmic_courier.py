@@ -1,4 +1,5 @@
 import sys
+import json
 
 class Good:
     """Represents a good that can be traded."""
@@ -7,6 +8,14 @@ class Good:
 
     def __repr__(self):
         return self.name
+
+    def __eq__(self, other):
+        if not isinstance(other, Good):
+            return NotImplemented
+        return self.name == other.name
+
+    def __hash__(self):
+        return hash(self.name)
 
 class Planet:
     """Represents a planet with a market."""
@@ -53,36 +62,43 @@ class Player:
         self.location = starting_planet
         self.credits = credits
 
-def setup_game():
-    """Sets up the initial game state."""
+def setup_game(data_file="game_data.json"):
+    """Sets up the initial game state from a data file."""
+    with open(data_file, 'r') as f:
+        game_data = json.load(f)
+
     # Create goods
-    water = Good("Water")
-    food = Good("Food")
-    minerals = Good("Minerals")
+    goods = {name: Good(name) for name in game_data["goods"]}
 
     # Create planets
-    terra = Planet("Terra")
-    mars = Planet("Mars")
-    europa = Planet("Europa")
-
-    # Add goods to markets
-    terra.add_good(water, 100)
-    terra.add_good(food, 150)
-    terra.add_good(minerals, 200)
-
-    mars.add_good(water, 120)
-    mars.add_good(food, 130)
-    mars.add_good(minerals, 180)
-
-    europa.add_good(water, 90)
-    europa.add_good(food, 160)
-    europa.add_good(minerals, 220)
-
-    planets = [terra, mars, europa]
+    planets = []
+    for planet_data in game_data["planets"]:
+        planet = Planet(planet_data["name"])
+        for good_name, price in planet_data["market"].items():
+            if good_name in goods:
+                planet.add_good(goods[good_name], price)
+        planets.append(planet)
 
     # Create ship and player
-    ship = Ship()
-    player = Player("Captain", ship, terra)
+    ship_defaults = game_data["defaults"]["ship"]
+    player_defaults = game_data["defaults"]["player"]
+
+    ship = Ship(
+        fuel_capacity=ship_defaults["fuel_capacity"],
+        cargo_hold_size=ship_defaults["cargo_hold_size"]
+    )
+
+    starting_planet_name = player_defaults["starting_planet"]
+    starting_planet = next((p for p in planets if p.name == starting_planet_name), None)
+    if not starting_planet:
+        raise ValueError(f"Starting planet '{starting_planet_name}' not found in planets list.")
+
+    player = Player(
+        "Captain",
+        ship,
+        starting_planet,
+        credits=player_defaults["credits"]
+    )
 
     return player, planets
 
@@ -165,23 +181,22 @@ def sell_goods(player):
     """Handles selling goods from the player's cargo."""
     good_name = input("What do you want to sell? ").lower()
 
-    good_to_sell = player.ship.remove_cargo(good_name)
+    # Find the good in cargo without removing it yet
+    good_to_sell = None
+    for good in player.ship.cargo:
+        if good.name.lower() == good_name:
+            good_to_sell = good
+            break
 
     if good_to_sell:
-        price = None
-        for good, p in player.location.market.items():
-            if good.name.lower() == good_to_sell.name.lower():
-                price = p
-                break
+        price = player.location.market.get(good_to_sell)
 
         if price is not None:
             player.credits += price
+            player.ship.remove_cargo(good_name) # Remove from cargo only after successful sale
             print(f"Sold {good_to_sell.name} for {price} credits.")
         else:
-            # This case should ideally not happen if all planets trade all goods
             print("This planet doesn't buy this good.")
-            # Put it back in cargo
-            player.ship.add_cargo(good_to_sell)
     else:
         print("Good not found in cargo.")
 
