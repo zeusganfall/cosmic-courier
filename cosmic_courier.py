@@ -3,6 +3,14 @@ import json
 import random
 import os
 
+class GameState:
+    """Manages the overall state of the game."""
+    def __init__(self, player, planets, game_data):
+        self.player = player
+        self.planets = planets
+        self.game_data = game_data
+        self.active_events = []
+
 class Good:
     """Represents a good that can be traded."""
     def __init__(self, name, good_type, base_price, base_stock):
@@ -43,12 +51,18 @@ class Market:
         self.stock = {}
         self.fuel_price = 0
 
-    def generate_market_data(self):
-        """Generates dynamic prices and stock for all goods, and fuel price."""
+    def generate_market_data(self, active_events):
+        """Generates dynamic prices and stock for all goods, and fuel price, considering active events."""
         self.prices = {}
         self.stock = {}
         for good in self.all_goods:
             price_modifier = self.modifiers[self.planet.tech_level][good.type]
+
+            # Check for event effects
+            for event in active_events:
+                for effect in event["effects"]:
+                    if effect["type"] == "price_modifier" and effect["good_type"] == good.type:
+                        price_modifier *= effect["multiplier"]
 
             # Calculate price
             price_random_factor = random.uniform(0.9, 1.1)
@@ -56,7 +70,7 @@ class Market:
             self.prices[good] = price
 
             # Calculate stock (inversely related to price modifier)
-            stock_modifier = 1 / price_modifier
+            stock_modifier = 1 / price_modifier if price_modifier != 0 else 100
             stock_random_factor = random.uniform(0.8, 1.2)
             stock = int(good.base_stock * stock_modifier * stock_random_factor)
             self.stock[good] = max(0, stock)
@@ -104,8 +118,9 @@ class Player:
         self.credits = credits
         self.display_mode = "normal"  # "normal" or "compact"
 
-def display_ui(player, last_action_message="Welcome to Cosmic Courier!", show_market=True):
+def display_ui(game_state, last_action_message="Welcome to Cosmic Courier!", show_market=True):
     """Clears the screen and displays the game's UI."""
+    player = game_state.player
     # 1. Clear screen
     os.system('cls' if os.name == 'nt' else 'clear')
 
@@ -126,6 +141,13 @@ def display_ui(player, last_action_message="Welcome to Cosmic Courier!", show_ma
     print("📝 Last Action:")
     print(last_action_message)
     print("-----------------------------")
+
+    # 4.5. Print Active Events
+    if game_state.active_events:
+        print("📰 Galactic News:")
+        for event in game_state.active_events:
+            print(f"- {event['name']} (Turns remaining: {event['duration']})")
+        print("-----------------------------")
 
     # 5. Print Market Panel (conditionally)
     if show_market:
@@ -183,9 +205,6 @@ def setup_game(data_file="game_data.json"):
     if not starting_planet:
         raise ValueError(f"Starting planet '{starting_planet_name}' not found in planets list.")
 
-    # Generate initial market data for the starting planet
-    starting_planet.market.generate_market_data()
-
     player = Player(
         "Captain",
         ship,
@@ -193,20 +212,62 @@ def setup_game(data_file="game_data.json"):
         credits=player_defaults["credits"]
     )
 
-    return player, planets, game_data
+    # Create the game state
+    game_state = GameState(player, planets, game_data)
 
-def game_loop(player, planets, game_data):
+    # Generate initial market data for the starting planet
+    starting_planet.market.generate_market_data(game_state.active_events)
+
+    return game_state
+
+def handle_events(game_state):
+    """Manages the lifecycle of galactic events."""
+    player = game_state.player
+    messages = []
+
+    # Decrement duration of active events and remove expired ones
+    for event in game_state.active_events[:]:
+        event["duration"] -= 1
+        if event["duration"] <= 0:
+            messages.append(f"The '{event['name']}' event has ended.")
+            game_state.active_events.remove(event)
+
+    # Trigger new events
+    event_chance = game_state.game_data["travel_options"]["event_trigger_chance"]
+    if random.random() < event_chance:
+        new_event = random.choice(game_state.game_data["events"])
+        # Avoid duplicate events
+        if not any(e['name'] == new_event['name'] for e in game_state.active_events):
+            # The event data from JSON is a template, create a copy to modify
+            active_event = new_event.copy()
+            game_state.active_events.append(active_event)
+            messages.append(f"A new galactic event has begun: {active_event['name']}!")
+            messages.append(f"  > {active_event['description']}")
+
+    return "\n".join(messages)
+
+def game_loop(game_state):
     """The main game loop."""
     last_action_message = "Welcome to Cosmic Courier! What are your orders, Captain?"
     while True:
+        player = game_state.player
+
+        # Handle event lifecycle
+        event_messages = handle_events(game_state)
+
+        # Combine messages
+        display_message = last_action_message
+        if event_messages:
+            display_message += "\n\n" + event_messages
+
         # Check for game over condition
         if player.ship.fuel <= 0 and player.credits <= 0:
-            display_ui(player, "You've run out of fuel and credits!\nYour journey ends here.", show_market=False)
+            display_ui(game_state, "You've run out of fuel and credits!\nYour journey ends here.", show_market=False)
             print("\n--- GAME OVER ---")
             sys.exit()
 
         show_market = player.display_mode == 'normal'
-        display_ui(player, last_action_message, show_market=show_market)
+        display_ui(game_state, display_message, show_market=show_market)
 
         try:
             choice = input("Enter command number: ")
@@ -217,13 +278,13 @@ def game_loop(player, planets, game_data):
             choice = int(choice)
 
             if choice == 1:
-                last_action_message = travel(player, planets, game_data)
+                last_action_message = travel(game_state)
             elif choice == 2:
-                last_action_message = buy_goods(player)
+                last_action_message = buy_goods(game_state)
             elif choice == 3:
-                last_action_message = sell_goods(player)
+                last_action_message = sell_goods(game_state)
             elif choice == 4:
-                last_action_message = refuel_ship(player)
+                last_action_message = refuel_ship(game_state)
             elif choice == 5:
                 last_action_message = "Status panel refreshed."
             elif choice == 6:
@@ -240,12 +301,15 @@ def game_loop(player, planets, game_data):
         except ValueError:
             last_action_message = f"Invalid input. Please enter a number."
 
-def travel(player, planets, game_data):
+def travel(game_state):
     """Handles player travel between planets, with distance-based fuel and random events."""
+    player = game_state.player
+    planets = game_state.planets
+    game_data = game_state.game_data
     destinations = [p for p in planets if p != player.location]
 
     message = "Please choose a destination."
-    display_ui(player, message, show_market=False)
+    display_ui(game_state, message, show_market=False)
     print("\nAvailable destinations:")
     for i, planet in enumerate(destinations):
         distance = game_data["distance_matrix"][player.location.name][planet.name]
@@ -266,10 +330,16 @@ def travel(player, planets, game_data):
             if player.ship.fuel >= fuel_cost:
                 player.ship.fuel -= fuel_cost
                 player.location = destination
-                destination.market.generate_market_data()
+                destination.market.generate_market_data(game_state.active_events)
 
                 # Random event check
                 event_chance = game_data["travel_options"]["random_event_chance"]
+                # Check for event effects on travel risk
+                for event in game_state.active_events:
+                    for effect in event["effects"]:
+                        if effect["type"] == "travel_risk_modifier":
+                            event_chance *= effect["multiplier"]
+
                 message = f"Traveled to {destination.name}. Fuel consumed: {fuel_cost}."
 
                 if random.random() < event_chance:
@@ -287,9 +357,10 @@ def travel(player, planets, game_data):
     except (ValueError, IndexError):
         return "Invalid destination choice."
 
-def buy_goods(player):
+def buy_goods(game_state):
     """Handles buying multiple goods from a planet's market."""
-    display_ui(player, "What would you like to buy? (Type 'cancel' to exit)", show_market=True)
+    player = game_state.player
+    display_ui(game_state, "What would you like to buy? (Type 'cancel' to exit)", show_market=True)
     good_name = input("Enter good name: ").lower()
 
     if good_name == 'cancel':
@@ -335,8 +406,9 @@ def buy_goods(player):
 
     return f"Bought {quantity} unit(s) of {found_good.name} for {total_cost} credits."
 
-def refuel_ship(player):
+def refuel_ship(game_state):
     """Handles refueling the player's ship."""
+    player = game_state.player
     fuel_price = player.location.market.fuel_price
     needed_fuel = player.ship.fuel_capacity - player.ship.fuel
 
@@ -344,7 +416,7 @@ def refuel_ship(player):
         return "Fuel tank is already full."
 
     message = f"Fuel costs {fuel_price} credits per unit. Your tank has space for {needed_fuel} units."
-    display_ui(player, message, show_market=False)
+    display_ui(game_state, message, show_market=False)
 
     try:
         quantity = int(input(f"Enter amount to refuel (max {needed_fuel}): "))
@@ -366,9 +438,10 @@ def refuel_ship(player):
 
     return f"Refueled {quantity} units for {total_cost} credits. Fuel is now {player.ship.fuel}/{player.ship.fuel_capacity}."
 
-def sell_goods(player):
+def sell_goods(game_state):
     """Handles selling multiple goods from the player's cargo."""
-    display_ui(player, "What would you like to sell? (Type 'cancel' to exit)", show_market=True)
+    player = game_state.player
+    display_ui(game_state, "What would you like to sell? (Type 'cancel' to exit)", show_market=True)
     good_name = input("Enter good name: ").lower()
 
     if good_name == 'cancel':
@@ -408,5 +481,5 @@ def sell_goods(player):
     return f"Sold {quantity_to_sell} unit(s) of {good_to_sell.name} for {total_sale} credits."
 
 if __name__ == "__main__":
-    player, planets, game_data = setup_game()
-    game_loop(player, planets, game_data)
+    game_state = setup_game()
+    game_loop(game_state)
